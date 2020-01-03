@@ -1,11 +1,29 @@
+// This is a very simple "hello world" test of the K20 (Teensy 3.2)
+// I2S audio output.
+//
 // Bruce MacKinnon KC1FSZ
 //
+// Here is the K20 reference manual:
+// https://www.nxp.com/docs/en/reference-manual/K20P64M72SF1RM.pdf
+// 
 // For Teensy 4.0:
 // https://www.pjrc.com/teensy/IMXRT1060RM_rev1.pdf
 // 
 //
 #include <Audio.h>
 
+/**
+13.6.1.3.4 Audio PLL (PLL4)
+The audio PLL synthesize a low jitter clock from a 24 MHz reference clock. The clock
+output frequency range for this PLL is from 650 MHz to 1.3 GHz. It has a Fractional-N
+synthesizer.
+
+There are /1, /2, /4 post dividers for the Audio PLL. The output frequency can be set by
+programming the fields in the CCM_ANALOG_PLL_AUDIO, and CCM_ANALOG_MISC2 register sets according 
+to the following equation: 
+
+PLL output frequency = Fref * (DIV_SELECT + NUM / DENOM)
+ */
 PROGMEM
 void set_audioClock2(int nfact, int32_t nmult, uint32_t ndiv, bool force = false) // sets PLL4
 {
@@ -97,13 +115,19 @@ struct __attribute__((packed, aligned(4))) TCD {
   };
 };
 
-volatile int16_t Ramp = 0;
+volatile uint32_t V = 0;
+volatile uint32_t RV = 0;
 
 // This is where we actually generate the transmit data.
+//
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
   for (unsigned int i = 0; i < txBufferSize; i++) {
-    Ramp += 100;
-    txBuffer[i] = Ramp;
+    // Ramp function
+    V += 100;
+    // We need to shift the data up to the high side of the 32-bit word
+    uint32_t s_left = 0;
+    uint32_t s_right = (V & 0xffff);    
+    txBuffer[i] = s_left | s_right;
   }
 }
 
@@ -114,6 +138,7 @@ volatile int AnalysisBlockPtr = 0;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
+  RV++;
   if (CaptureEnabled) {
     for (unsigned int i = 0; i < rxBufferSize; i++) {
       //uint16_t hi = (rxBuffer[i] & 0xffff0000) >> 16;
@@ -169,7 +194,7 @@ void rx_dma_isr_function(void) {
   
   struct TCD* tcd = (struct TCD*)(0x400E9000 + 32 * RX_DMA_Channel); 
   uint32_t daddr = (uint32_t)tcd->DADDR;
-   
+
   // Clear interrupt request for channel
   DMA_CINT = RX_DMA_Channel;
 
@@ -193,9 +218,6 @@ void setup() {
   delay(1000);
   Serial.println("KC1FSZ");
 
-  sgtl5000_1.enable();
-  sgtl5000_1.volume(1.0);
-
   // ----- Enable DMA ----------------------------------------------------
   //
   // DMAChannel.begin()
@@ -205,10 +227,8 @@ void setup() {
 
   // Decide which channels to use
   uint32_t tx_ch = 0;
-  uint32_t rx_ch = 0;
+  uint32_t rx_ch = 1;
   
-  __enable_irq();
-
   TX_DMA_Channel = tx_ch;
 
   // Clock control
@@ -363,25 +383,40 @@ void setup() {
 
   // ========================================================================
   // Receive Setup
-
+  
+  // DMAChannel::begin() 
   RX_DMA_Channel = rx_ch;
+  
+  // Clock control
+  // Clock Gating Register 5 - Enable DMA clock
+  CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
+
+  // DMA control register
+  // Group 1 priority, minor loop enabled, debug enabled
+  DMA_CR = DMA_CR_GRP1PRI | DMA_CR_EMLM | DMA_CR_EDBG;  
   
   DMA_CERQ = rx_ch;
   DMA_CERR = rx_ch;
   DMA_CEEI = rx_ch;
   DMA_CINT = rx_ch;
-
+  
   // Establish pointer to control structure
   tcd = (struct TCD*)(0x400E9000 + rx_ch * 32); 
   // Clear 
   p = (uint32_t*)tcd;
   for (int i = 0; i < 8; i++)
     *p++ = 0;
+  
+  // -----------------------
+  // AudioOutputI2S::begin()
 
+  // (DMAChannel.begin() - see above)
+  // (AudioOutputI2S::config_i2s() - see above)
+  
   // RX_DATA0
   CORE_PIN8_CONFIG = 3;  
-  IOMUXC_SAI1_RX_DATA0_SELECT_INPUT = 1;
-
+  IOMUXC_SAI1_RX_DATA0_SELECT_INPUT = 2;
+  
   // Source address is the high side of the receive buffer
   tcd->SADDR = (void*)((uint32_t)&I2S1_RDR0 + 2);
   tcd->SOFF = 0;
@@ -399,7 +434,7 @@ void setup() {
   tcd->BITER_ELINKNO = sizeof(i2s_rx_buffer) / 2;
   // Generate interrupt when major counter completes
   tcd->CSR = DMA_TCD_CSR_INTHALF | DMA_TCD_CSR_INTMAJOR;
-
+  
   // DMAChannel::triggerAtHardwareEvent()
   // ====================================
 
@@ -408,9 +443,9 @@ void setup() {
   mux = &DMAMUX_CHCFG0 + RX_DMA_Channel;
   *mux = 0;
   *mux = (source & 0x7F) | DMAMUX_CHCFG_ENBL;
-
+  
   I2S1_RCSR = I2S_RCSR_RE | I2S_RCSR_BCE | I2S_RCSR_FRDE | I2S_RCSR_FR;
-
+  
   // DMAChannel::enable()
   // ====================
   // Set Enable Request Register (DMA_SERQ). Enable DMA for the specified channel.
@@ -420,24 +455,18 @@ void setup() {
   // =============================
   _VectorsRam[16 + IRQ_DMA_CH0 + RX_DMA_Channel] = rx_dma_isr_function;
   NVIC_ENABLE_IRQ(IRQ_DMA_CH0 + RX_DMA_Channel);
-
-  Serial.println("setup() done");
+  
+  __enable_irq();
+  
+  delay(1000);
+  
+  sgtl5000_1.enable();
+  sgtl5000_1.volume(1.0);
 
   CaptureEnabled = true;
+  
+  Serial.println("setup() done");
 }
-
-/*            
-              INV       (INV + 1) & 0b111
-              ---       -----------------             
-  000   0     111 + 1 = 000 ->  0
-  001   1     110 + 1 = 111 -> -1
-  010   2     101 + 1 = 110 -> -2 
-  011   3     100 + 1 = 101 -> -3
-  100  -4     011 + 1 = 100 -> -4
-  101  -3     010 + 1 = 011 ->  3
-  110  -2     001 + 1 = 010 ->  2
-  111  -1     000 + 1 = 001 ->  1
-*/
 
 void doAnalysis() {
 
@@ -471,6 +500,7 @@ volatile long lastDisplay = 0;
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
+    Serial.println(RV);
     if (AnalysisBlockAvailable) {
       doAnalysis();
       AnalysisBlockAvailable = false;   
