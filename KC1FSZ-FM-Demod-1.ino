@@ -47,26 +47,7 @@ void set_audioClock2(int nfact, int32_t nmult, uint32_t ndiv, bool force = false
   CCM_ANALOG_PLL_AUDIO &= ~CCM_ANALOG_PLL_AUDIO_BYPASS;//Disable Bypass
 }
 
-AudioControlSGTL5000  sgtl5000_1;
-
-const unsigned int SampleFreqHz = 44100;
-
-uint8_t TX_DMA_Channel = 0;
-uint8_t RX_DMA_Channel = 1;
-
-// This is the size of the buffer used for DMA transmit operations
-const unsigned int tx_buffer_size = 128;
-const unsigned int rx_buffer_size = 128;
-
-// Create the buffer from which DMA transmit/receive operations will happen.
-//
-// (From PJS) "DMAMEM is not required. It only serves to place your buffers lower in memory.
-// The idea is typical programs will do most of their ordinary memory access to the stack, 
-// located in the upper memory. If your buffers are in lower memory, odds are (maybe) less 
-// of the memory controller adding a wait state if the CPU and DMA want to access the same 
-// region of memory in the same clock cycle.
-DMAMEM __attribute__((aligned(32))) static uint32_t i2s_tx_buffer[tx_buffer_size];
-DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size];
+// ====== DMA Stuff ====================================================================
 
 // This structure matches the layout of the DMA Transfer Control Descriptor
 //
@@ -115,6 +96,95 @@ struct __attribute__((packed, aligned(4))) TCD {
   };
 };
 
+struct TCD* DMAChannel_begin(uint32_t ch) {
+  
+  __disable_irq();
+  __enable_irq();
+  
+  // Clock control
+  // Clock Gating Register 5 - Enable DMA clock
+  CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
+
+  // DMA control register
+  // Group 1 priority, minor loop enabled, debug enabled
+  DMA_CR = DMA_CR_GRP1PRI | DMA_CR_EMLM | DMA_CR_EDBG;  
+  DMA_CERQ = ch;
+  DMA_CERR = ch;
+  DMA_CEEI = ch;
+  DMA_CINT = ch;
+
+  // Establish pointer to control structure
+  struct TCD* tcd = (struct TCD*)(0x400E9000 + ch * 32); 
+  // Clear 
+  uint32_t *p = (uint32_t *)tcd;
+  for (int i = 0; i < 8; i++)
+    *p++ = 0;
+
+  return tcd;
+}
+
+static void DMAChannel_triggerAtHardwareEvent(uint8_t source,uint8_t channel) {
+  // Get the mux setup 
+  volatile uint32_t* mux = &DMAMUX_CHCFG0 + channel;
+  *mux = 0;
+  *mux = (source & 0x7F) | DMAMUX_CHCFG_ENBL;
+}
+
+static void DMAChannel_enable(uint8_t channel) {
+  DMA_SERQ = channel;
+}
+
+static void DMAChannel_attachInterrupt(uint8_t channel,void (*isr)(void)) {
+  // _VectorsRam is created by the Teensy library and it has been initialized
+  // using the flash vector table. 
+  //
+  // void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
+  //
+  // This is the code that maps the RAM table:
+  //
+  // SCB_VTOR = (uint32_t)_VectorsRam; // use vector table in RAM
+  //
+  // There are 16 extra entries in the table before the normal IRQ entries
+  //
+  _VectorsRam[16 + IRQ_DMA_CH0 + channel] = isr;
+  NVIC_ENABLE_IRQ(IRQ_DMA_CH0 + channel);
+}
+
+static void DMAChannel_clearInterrupt(uint8_t channel) {
+  // The INT register provides a bit map for the 16 channels signaling the presence of an
+  // interrupt request for each channel. Depending on the appropriate bit setting in the
+  // transfer-control descriptors, the eDMA engine generates an interrupt on data transfer
+  // completion. The outputs of this register are directly routed to the interrupt controller
+  // (INTC). During the interrupt-service routine associated with any given channel, it is the
+  // software’s responsibility to clear the appropriate bit, negating the interrupt request.
+  // Typically, a write to the CINT register in the interrupt service routine is used for this
+  // purpose.
+  DMA_CINT = channel;
+}
+
+// This is the size of the buffer used for DMA transmit operations
+const unsigned int tx_buffer_size = 128;
+const unsigned int rx_buffer_size = 128;
+
+// Create the buffer from which DMA transmit/receive operations will happen.
+//
+// (From PJS) "DMAMEM is not required. It only serves to place your buffers lower in memory.
+// The idea is typical programs will do most of their ordinary memory access to the stack, 
+// located in the upper memory. If your buffers are in lower memory, odds are (maybe) less 
+// of the memory controller adding a wait state if the CPU and DMA want to access the same 
+// region of memory in the same clock cycle.
+DMAMEM __attribute__((aligned(32))) static uint32_t i2s_tx_buffer[tx_buffer_size];
+DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size];
+
+AudioControlSGTL5000  sgtl5000_1;
+
+uint8_t TX_DMA_Channel;
+uint8_t RX_DMA_Channel;
+struct TCD* TX_TCD;
+struct TCD* RX_TCD;
+
+//const unsigned int SampleFreqHz = 44100;
+
 volatile uint32_t V = 0;
 volatile uint32_t RV = 0;
 
@@ -159,20 +229,10 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
 // Interrupt service routine from DMA controller
 void tx_dma_isr_function(void) {  
   
-  struct TCD* tcd = (struct TCD*)(0x400E9000 + 32 * TX_DMA_Channel); 
-  uint32_t saddr = (uint32_t)tcd->SADDR;
+  uint32_t saddr = (uint32_t)TX_TCD->SADDR;
  
-  // The INT register provides a bit map for the 16 channels signaling the presence of an
-  // interrupt request for each channel. Depending on the appropriate bit setting in the
-  // transfer-control descriptors, the eDMA engine generates an interrupt on data transfer
-  // completion. The outputs of this register are directly routed to the interrupt controller
-  // (INTC). During the interrupt-service routine associated with any given channel, it is the
-  // software’s responsibility to clear the appropriate bit, negating the interrupt request.
-  // Typically, a write to the CINT register in the interrupt service routine is used for this
-  // purpose.
-  
   // Clear interrupt request for channel
-  DMA_CINT = TX_DMA_Channel;
+  DMAChannel_clearInterrupt(TX_DMA_Channel);
 
   // Check to see what part of the TX buffer the DMA channel is working on.  If 
   // the DMA is working on the first half of the buffer then the new data should
@@ -193,11 +253,10 @@ void tx_dma_isr_function(void) {
 // Interrupt service routine from DMA controller
 void rx_dma_isr_function(void) {  
   
-  struct TCD* tcd = (struct TCD*)(0x400E9000 + 32 * RX_DMA_Channel); 
-  uint32_t daddr = (uint32_t)tcd->DADDR;
+  uint32_t daddr = (uint32_t)TX_TCD->DADDR;
 
   // Clear interrupt request for channel
-  DMA_CINT = RX_DMA_Channel;
+  DMAChannel_clearInterrupt(RX_DMA_Channel);
 
   // Check to see what part of the RX buffer the DMA channel is working on.  If 
   // the DMA is working on the first half of the buffer then the new data should
@@ -213,49 +272,16 @@ void rx_dma_isr_function(void) {
   consume_rx_data(&(i2s_rx_buffer[startPtr]),rx_buffer_size / 2);
 }
 
-void setup() {
+// ===== I2S Setup ================================================================
 
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("KC1FSZ");
-
-  // ----- Enable DMA ----------------------------------------------------
-  //
-  // DMAChannel.begin()
-  // ==================
-  //
-  __disable_irq();
-
-  // Decide which channels to use
-  uint32_t tx_ch = 0;
-  uint32_t rx_ch = 1;
-  
-  TX_DMA_Channel = tx_ch;
-
-  // Clock control
-  // Clock Gating Register 5 - Enable DMA clock
-  CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
-
-  // DMA control register
-  // Group 1 priority, minor loop enabled, debug enabled
-  DMA_CR = DMA_CR_GRP1PRI | DMA_CR_EMLM | DMA_CR_EDBG;  
-  DMA_CERQ = tx_ch;
-  DMA_CERR = tx_ch;
-  DMA_CEEI = tx_ch;
-  DMA_CINT = tx_ch;
-
-  // Establish pointer to control structure
-  struct TCD* tcd = (struct TCD*)(0x400E9000 + tx_ch * 32); 
-  // Clear 
-  uint32_t *p = (uint32_t *)tcd;
-  for (int i = 0; i < 8; i++)
-    *p++ = 0;
-
-  // AudioOutputI2S::config_i2s(void)
-  // ================================
+static void AudioOutputI2S_config_i2s() {
   
   // Enable clock for SAI1 module
   CCM_CCGR5 |= CCM_CCGR5_SAI1(CCM_CCGR_ON);
+
+  // If either transmitter or receiver is enabled, do nothing (prevents multiple setups)
+  if (I2S1_TCSR & I2S_TCSR_TE) return;
+  if (I2S1_RCSR & I2S_RCSR_RE) return;
 
   int fs = 44100.0;
   // PLL between 27*24 = 648 MHz and 54*24=1296 MHz
@@ -266,6 +292,7 @@ void setup() {
   int c0 = C;
   int c2 = 10000;
   int c1 = C * c2 - (c0 * c2);
+
   set_audioClock2(c0,c1,c2);
 
   // clear SAI1_CLK register locations
@@ -311,11 +338,19 @@ void setup() {
   I2S1_RCR4 = I2S_RCR4_FRSZ((2-1)) | I2S_RCR4_SYWD((32-1)) | I2S_RCR4_MF
         | I2S_RCR4_FSE | I2S_RCR4_FSP | I2S_RCR4_FSD;
   I2S1_RCR5 = I2S_RCR5_WNW((32-1)) | I2S_RCR5_W0W((32-1)) | I2S_RCR5_FBT((32-1));
+}
 
+static void AudioOutputI2S_begin() {
+
+  // Setup DMA channel, assume this gets called second
+  TX_DMA_Channel = 1;
+  TX_TCD = DMAChannel_begin(TX_DMA_Channel);
+  
+  AudioOutputI2S_config_i2s();
+  
   CORE_PIN7_CONFIG = 3; // 1:TX_DATA0
-
-  // ----- Configure DMA -------------------------------------------------------
-
+  
+  struct TCD* tcd = TX_TCD;
   // Configure the source source buffer
   tcd->SADDR = i2s_tx_buffer;
   // Amount that the source address is adjusted after each read.  
@@ -346,78 +381,28 @@ void setup() {
   // Destination - High side of 32 bit register
   tcd->DADDR = (void*)((uint32_t)&I2S1_TDR0 + 2);
 
-  // DMAChannel::triggerAtHardwareEvent()
-  // ====================================
-
-  // Get the mux setup 
-  uint8_t source = DMAMUX_SOURCE_SAI1_TX;
-  volatile uint32_t* mux = &DMAMUX_CHCFG0 + TX_DMA_Channel;
-  *mux = 0;
-  *mux = (source & 0x7F) | DMAMUX_CHCFG_ENBL;
-
-  // DMAChannel::enable()
-  // ====================
-  // Set Enable Request Register (DMA_SERQ). Enable DMA for the specified channel 
-  DMA_SERQ = TX_DMA_Channel;
+  DMAChannel_triggerAtHardwareEvent(DMAMUX_SOURCE_SAI1_TX,TX_DMA_Channel);
+  DMAChannel_enable(TX_DMA_Channel);
 
   I2S1_RCSR |= I2S_RCSR_RE | I2S_RCSR_BCE;
   I2S1_TCSR = I2S_TCSR_TE | I2S_TCSR_BCE | I2S_TCSR_FRDE;
 
-  // DMAChannel::attachInterrupt()
-  // =============================
-  
-  // Install the interrupt handler
-  //
-  // _VectorsRam is created by the Teensy library and it has been initialized
-  // using the flash vector table. 
-  //
-  // void (* _VectorsRam[NVIC_NUM_INTERRUPTS+16])(void);
-  //
-  // This is the code that maps the RAM table:
-  //
-  // SCB_VTOR = (uint32_t)_VectorsRam; // use vector table in RAM
-  //
-  // There are 16 extra entries in the table before the normal IRQ entries
-  //
-  _VectorsRam[16 + IRQ_DMA_CH0 + TX_DMA_Channel] = tx_dma_isr_function;
-  NVIC_ENABLE_IRQ(IRQ_DMA_CH0 + TX_DMA_Channel);
+  DMAChannel_attachInterrupt(TX_DMA_Channel,tx_dma_isr_function);
+}
 
-  // ========================================================================
-  // Receive Setup
-  
-  // DMAChannel::begin() 
-  RX_DMA_Channel = rx_ch;
-  
-  // Clock control
-  // Clock Gating Register 5 - Enable DMA clock
-  CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
+static void AudioInputI2S_begin() {
 
-  // DMA control register
-  // Group 1 priority, minor loop enabled, debug enabled
-  DMA_CR = DMA_CR_GRP1PRI | DMA_CR_EMLM | DMA_CR_EDBG;  
-  
-  DMA_CERQ = rx_ch;
-  DMA_CERR = rx_ch;
-  DMA_CEEI = rx_ch;
-  DMA_CINT = rx_ch;
-  
-  // Establish pointer to control structure
-  tcd = (struct TCD*)(0x400E9000 + rx_ch * 32); 
-  // Clear 
-  p = (uint32_t*)tcd;
-  for (int i = 0; i < 8; i++)
-    *p++ = 0;
-  
-  // -----------------------
-  // AudioOutputI2S::begin()
+  // We assume this takes the first DMA channel
+  RX_DMA_Channel = 0;
+  RX_TCD = DMAChannel_begin(RX_DMA_Channel);
 
-  // (DMAChannel.begin() - see above)
-  // (AudioOutputI2S::config_i2s() - see above)
-  
+  AudioOutputI2S_config_i2s();
+
   // RX_DATA0
   CORE_PIN8_CONFIG = 3;  
   IOMUXC_SAI1_RX_DATA0_SELECT_INPUT = 2;
   
+  struct TCD* tcd = RX_TCD;
   // Source address is the high side of the receive buffer
   tcd->SADDR = (void*)((uint32_t)&I2S1_RDR0 + 2);
   tcd->SOFF = 0;
@@ -435,30 +420,25 @@ void setup() {
   tcd->BITER_ELINKNO = sizeof(i2s_rx_buffer) / 2;
   // Generate interrupt when major counter completes
   tcd->CSR = DMA_TCD_CSR_INTHALF | DMA_TCD_CSR_INTMAJOR;
-  
-  // DMAChannel::triggerAtHardwareEvent()
-  // ====================================
-
-  // Get the mux setup 
-  source = DMAMUX_SOURCE_SAI1_RX;
-  mux = &DMAMUX_CHCFG0 + RX_DMA_Channel;
-  *mux = 0;
-  *mux = (source & 0x7F) | DMAMUX_CHCFG_ENBL;
+  DMAChannel_triggerAtHardwareEvent(DMAMUX_SOURCE_SAI1_RX,RX_DMA_Channel);
   
   I2S1_RCSR = I2S_RCSR_RE | I2S_RCSR_BCE | I2S_RCSR_FRDE | I2S_RCSR_FR;
   
-  // DMAChannel::enable()
-  // ====================
-  // Set Enable Request Register (DMA_SERQ). Enable DMA for the specified channel.
-  DMA_SERQ = RX_DMA_Channel;
+  DMAChannel_enable(RX_DMA_Channel);
+  DMAChannel_attachInterrupt(RX_DMA_Channel,rx_dma_isr_function);
+}
 
-  // DMAChannel::attachInterrupt()
-  // =============================
-  _VectorsRam[16 + IRQ_DMA_CH0 + RX_DMA_Channel] = rx_dma_isr_function;
-  NVIC_ENABLE_IRQ(IRQ_DMA_CH0 + RX_DMA_Channel);
-  
-  __enable_irq();
-  
+void setup() {
+
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("KC1FSZ");
+
+  // Setup the I2S input
+  AudioInputI2S_begin(); // Constructor calls being
+  // Setup the I2S output
+  AudioOutputI2S_begin();  
+
   delay(1000);
   
   sgtl5000_1.enable();
