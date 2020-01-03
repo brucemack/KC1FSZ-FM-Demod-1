@@ -431,14 +431,14 @@ void setup() {
   delay(1000);
   Serial.println("KC1FSZ");
 
-  __disable_irq();
+  cli();
 
   // Setup the I2S input
   //AudioInputI2S_begin(); // Constructor calls being
   // Setup the I2S output
   AudioOutputI2S_begin();  
 
-  __enable_irq();
+  sei();
 
   delay(1000);
   
@@ -487,11 +487,13 @@ void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
     Serial.println(RV);
+    cli();
     if (AnalysisBlockAvailable) {
       doAnalysis();
       AnalysisBlockAvailable = false;   
       // Start on a new one
       CaptureEnabled = true;
     } 
+    sei();
   }
 }
