@@ -462,9 +462,9 @@ void setup() {
   delay(1000);
   
   sgtl5000_1.enable();
-  sgtl5000_1.volume(1.0);
-  sgtl5000_1.inputSelect(AUDIO_LINE_IN);
-  sgtl5000_1.lineInLevel(1.0);
+  sgtl5000_1.volume(0.5);
+  sgtl5000_1.inputSelect(AUDIO_INPUT_LINEIN);
+  sgtl5000_1.lineInLevel(8);
 
   CaptureEnabled = true;
   
