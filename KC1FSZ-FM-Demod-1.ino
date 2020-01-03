@@ -97,8 +97,14 @@ struct __attribute__((packed, aligned(4))) TCD {
   };
 };
 
+volatile int16_t Ramp = 0;
+
 // This is where we actually generate the transmit data.
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
+  for (unsigned int i = 0; i < txBufferSize; i++) {
+    Ramp += 100;
+    txBuffer[i] = Ramp;
+  }
 }
 
 volatile bool CaptureEnabled = false;
