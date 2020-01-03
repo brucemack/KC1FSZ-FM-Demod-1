@@ -47,6 +47,20 @@ void set_audioClock2(int nfact, int32_t nmult, uint32_t ndiv, bool force = false
   CCM_ANALOG_PLL_AUDIO &= ~CCM_ANALOG_PLL_AUDIO_BYPASS;//Disable Bypass
 }
 
+// This is the size of the buffer used for DMA transmit operations
+const unsigned int tx_buffer_size = 128;
+const unsigned int rx_buffer_size = 128;
+
+// Create the buffer from which DMA transmit/receive operations will happen.
+//
+// (From PJS) "DMAMEM is not required. It only serves to place your buffers lower in memory.
+// The idea is typical programs will do most of their ordinary memory access to the stack, 
+// located in the upper memory. If your buffers are in lower memory, odds are (maybe) less 
+// of the memory controller adding a wait state if the CPU and DMA want to access the same 
+// region of memory in the same clock cycle.
+DMAMEM __attribute__((aligned(32))) static uint32_t i2s_tx_buffer[tx_buffer_size];
+DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size];
+
 // ====== DMA Stuff ====================================================================
 
 // This structure matches the layout of the DMA Transfer Control Descriptor
@@ -95,10 +109,7 @@ struct __attribute__((packed, aligned(4))) TCD {
 };
 
 struct TCD* DMAChannel_begin(uint32_t ch) {
-  
-  __disable_irq();
-  __enable_irq();
-  
+    
   // Clock control
   // Clock Gating Register 5 - Enable DMA clock
   CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
@@ -121,11 +132,11 @@ struct TCD* DMAChannel_begin(uint32_t ch) {
   return tcd;
 }
 
-static void DMAChannel_triggerAtHardwareEvent(uint8_t source,uint8_t channel) {
+static void DMAChannel_triggerAtHardwareEvent(uint8_t s,uint8_t channel) {
   // Get the mux setup 
   volatile uint32_t* mux = &DMAMUX_CHCFG0 + channel;
   *mux = 0;
-  *mux = (source & 0x7F) | DMAMUX_CHCFG_ENBL;
+  *mux = (s & 0x7F) | DMAMUX_CHCFG_ENBL;
 }
 
 static void DMAChannel_enable(uint8_t channel) {
@@ -160,26 +171,12 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
-// This is the size of the buffer used for DMA transmit operations
-const unsigned int tx_buffer_size = 128;
-const unsigned int rx_buffer_size = 128;
-
-// Create the buffer from which DMA transmit/receive operations will happen.
-//
-// (From PJS) "DMAMEM is not required. It only serves to place your buffers lower in memory.
-// The idea is typical programs will do most of their ordinary memory access to the stack, 
-// located in the upper memory. If your buffers are in lower memory, odds are (maybe) less 
-// of the memory controller adding a wait state if the CPU and DMA want to access the same 
-// region of memory in the same clock cycle.
-DMAMEM __attribute__((aligned(32))) static uint32_t i2s_tx_buffer[tx_buffer_size];
-DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size];
-
 AudioControlSGTL5000  sgtl5000_1;
 
-uint8_t TX_DMA_Channel;
-uint8_t RX_DMA_Channel;
-struct TCD* TX_TCD;
-struct TCD* RX_TCD;
+static uint8_t TX_DMA_Channel = 0;
+static uint8_t RX_DMA_Channel = 0;
+static struct TCD* TX_TCD;
+static struct TCD* RX_TCD;
 
 //const unsigned int SampleFreqHz = 44100;
 
@@ -345,7 +342,7 @@ static void AudioOutputI2S_begin() {
   // Setup DMA channel, assume this gets called second
   TX_DMA_Channel = 1;
   TX_TCD = DMAChannel_begin(TX_DMA_Channel);
-  
+
   AudioOutputI2S_config_i2s();
   
   CORE_PIN7_CONFIG = 3; // 1:TX_DATA0
@@ -434,10 +431,14 @@ void setup() {
   delay(1000);
   Serial.println("KC1FSZ");
 
+  __disable_irq();
+
   // Setup the I2S input
-  AudioInputI2S_begin(); // Constructor calls being
+  //AudioInputI2S_begin(); // Constructor calls being
   // Setup the I2S output
   AudioOutputI2S_begin();  
+
+  __enable_irq();
 
   delay(1000);
   
