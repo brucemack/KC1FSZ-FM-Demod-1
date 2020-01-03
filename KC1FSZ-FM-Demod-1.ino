@@ -1,4 +1,4 @@
-// This is a very simple "hello world" test of the K20 (Teensy 3.2)
+// This is a very simple "hello world" test of the K20 (Teensy 4.0)
 // I2S audio output.
 //
 // Bruce MacKinnon KC1FSZ
@@ -50,8 +50,6 @@ void set_audioClock2(int nfact, int32_t nmult, uint32_t ndiv, bool force = false
 // ====== DMA Stuff ====================================================================
 
 // This structure matches the layout of the DMA Transfer Control Descriptor
-//
-// Address: 4000_8000h base + 1000h offset + (32d × i), where i=0d to 15d
 //
 struct __attribute__((packed, aligned(4))) TCD {    
   // Source Address 
@@ -201,6 +199,7 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   }
 }
 
+volatile int CaptureCount = 0;
 volatile bool CaptureEnabled = false;
 volatile bool AnalysisBlockAvailable = false;
 volatile float32_t AnalysisBlock[1024];
@@ -210,6 +209,7 @@ volatile int AnalysisBlockPtr = 0;
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   RV++;
   if (CaptureEnabled) {
+    CaptureCount++;
     for (unsigned int i = 0; i < rxBufferSize; i++) {
       //uint16_t hi = (rxBuffer[i] & 0xffff0000) >> 16;
       uint16_t lo = (rxBuffer[i] & 0x0000ffff);
@@ -469,7 +469,9 @@ void doAnalysis() {
 
   avg /= 1024.0;
 
-  Serial.print("min= ");
+  Serial.print("count= ");
+  Serial.print(CaptureCount);
+  Serial.print(" min= ");
   Serial.print(min);
   Serial.print(" max= ");
   Serial.print(max);
