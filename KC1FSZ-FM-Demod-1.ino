@@ -150,6 +150,7 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
       if (AnalysisBlockPtr == 1024) {
         CaptureEnabled = false;
         AnalysisBlockAvailable = true;
+        AnalysisBlockPtr = 0;
       }
     }
   }
@@ -488,9 +489,9 @@ void doAnalysis() {
 
   Serial.print("min= ");
   Serial.print(min);
-  Serial.print("max= ");
+  Serial.print(" max= ");
   Serial.print(max);
-  Serial.print("avg= ");
+  Serial.print(" avg= ");
   Serial.print(avg);
   Serial.println();
 }
