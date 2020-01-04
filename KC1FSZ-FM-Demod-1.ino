@@ -220,7 +220,6 @@ uint8_t TX_DMA_Channel = 0;
 uint8_t RX_DMA_Channel = 0;
 
 volatile uint32_t V = 0;
-volatile uint32_t RV = 0;
 
 // This is where we actually generate the transmit data.
 //
@@ -235,7 +234,6 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   }
 }
 
-volatile int CaptureCount = 0;
 volatile bool CaptureEnabled = false;
 volatile bool AnalysisBlockAvailable = false;
 volatile float32_t AnalysisBlock[1024];
@@ -243,11 +241,8 @@ volatile int AnalysisBlockPtr = 0;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
-  RV++;
   if (CaptureEnabled) {
-    CaptureCount++;
     for (unsigned int i = 0; i < rxBufferSize; i++) {
-
       // Decompose into left and right channels
       uint16_t right = (rxBuffer[i] & 0xffff0000) >> 16;
       int16_t rightSigned = right;
@@ -526,9 +521,7 @@ void doAnalysis() {
 
   avg /= 1024.0;
 
-  Serial.print("count= ");
-  Serial.print(CaptureCount);
-  Serial.print(" min= ");
+  Serial.print("Stats: min= ");
   Serial.print(min);
   Serial.print(" max= ");
   Serial.print(max);
@@ -556,8 +549,8 @@ void doAnalysis() {
 
   int div = (4410000 / 2) / 512;
 
-  Serial.print("Max mag=");
-  Serial.print(maxMag);
+  Serial.print("Spectral Max mag=");
+  Serial.print(maxMag / 1024.0);
   Serial.print(" bucket=");
   Serial.print(maxBucket);
   Serial.print(" freq=");
@@ -570,7 +563,6 @@ volatile long lastDisplay = 0;
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
-    Serial.println(RV);
     cli();
     if (AnalysisBlockAvailable) {
       doAnalysis();
