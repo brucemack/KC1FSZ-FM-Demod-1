@@ -130,6 +130,9 @@ struct TCD* DMAChannel_getTCD(uint8_t channel) {
   return (struct TCD*)(0x400E9000 + (uint32_t)channel * 32); 
 }
 
+/**
+ * Allocates the next available DMA channel and initializes it.
+ */
 uint8_t DMAChannel_begin() {
 
   // Search for available channel
@@ -161,9 +164,8 @@ uint8_t DMAChannel_begin() {
   DMA_CEEI = ch;
   DMA_CINT = ch;
 
-  // Establish pointer to control structure
+  // Clear control structure
   struct TCD* tcd = DMAChannel_getTCD(ch);
-  // Clear 
   uint32_t *p = (uint32_t*)tcd;
   for (int i = 0; i < 8; i++)
     *p++ = 0;
@@ -212,8 +214,8 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
 
 AudioControlSGTL5000  sgtl5000_1;
 
-uint8_t TX_DMA_Channel;
-uint8_t RX_DMA_Channel;
+uint8_t TX_DMA_Channel = 0;
+uint8_t RX_DMA_Channel = 0;
 
 volatile uint32_t V = 0;
 volatile uint32_t RV = 0;
@@ -261,7 +263,7 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
 // Interrupt service routine from DMA controller
 void tx_dma_isr_function(void) {  
 
-  struct TCD* tcd = DMAChannel_getTCD(TX_DMA_Channel);
+  const struct TCD* tcd = DMAChannel_getTCD(TX_DMA_Channel);
   uint32_t saddr = (uint32_t)tcd->SADDR;
  
   // Clear interrupt request for channel
@@ -286,7 +288,7 @@ void tx_dma_isr_function(void) {
 // Interrupt service routine from DMA controller
 void rx_dma_isr_function(void) {  
 
-  struct TCD* tcd = DMAChannel_getTCD(RX_DMA_Channel);
+  const struct TCD* tcd = DMAChannel_getTCD(RX_DMA_Channel);
   uint32_t daddr = (uint32_t)tcd->DADDR;
 
   // Clear interrupt request for channel
