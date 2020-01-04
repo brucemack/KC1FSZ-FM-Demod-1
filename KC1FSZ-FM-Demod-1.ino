@@ -25,6 +25,7 @@ TEENSY AUDIO LIBRARY BY PAUL STOFFREGEN.  HIS COPYRIGHT FOLLOWS BELOW:
  * The above copyright notice, development funding notice, and this permission
  */
 #include <Audio.h>
+#include <arm_math.h>
 
 /**
 13.6.1.3.4 Audio PLL (PLL4)
@@ -246,11 +247,14 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   if (CaptureEnabled) {
     CaptureCount++;
     for (unsigned int i = 0; i < rxBufferSize; i++) {
-      //uint16_t hi = (rxBuffer[i] & 0xffff0000) >> 16;
-      uint16_t lo = (rxBuffer[i] & 0x0000ffff);
-      int16_t lowSigned = lo;
-      float32_t sample = lowSigned;
-      AnalysisBlock[AnalysisBlockPtr] = sample;
+
+      // Decompose into left and right channels
+      uint16_t right = (rxBuffer[i] & 0xffff0000) >> 16;
+      int16_t rightSigned = right;
+      uint16_t left = (rxBuffer[i] & 0x0000ffff);
+      int16_t leftSigned = left;
+ 
+      AnalysisBlock[AnalysisBlockPtr] = rightSigned;
       AnalysisBlockPtr++;
       if (AnalysisBlockPtr == 1024) {
         CaptureEnabled = false;
@@ -346,9 +350,9 @@ static void AudioOutputI2S_config_i2s() {
     & ~(IOMUXC_GPR_GPR1_SAI1_MCLK1_SEL_MASK))
     | (IOMUXC_GPR_GPR1_SAI1_MCLK_DIR | IOMUXC_GPR_GPR1_SAI1_MCLK1_SEL(0));
 
-  CORE_PIN23_CONFIG = 3;  //1:MCLK
-  CORE_PIN21_CONFIG = 3;  //1:RX_BCLK
-  CORE_PIN20_CONFIG = 3;  //1:RX_SYNC
+  CORE_PIN23_CONFIG = 3;  // 1:MCLK
+  CORE_PIN21_CONFIG = 3;  // 1:RX_BCLK
+  CORE_PIN20_CONFIG = 3;  // 1:RX_SYNC
 
   int rsync = 0;
   int tsync = 1;
@@ -463,16 +467,23 @@ static void AudioInputI2S_begin() {
   DMAChannel_attachInterrupt(RX_DMA_Channel,rx_dma_isr_function);
 }
 
+arm_rfft_fast_instance_f32 FFT_Instance;
+
 void setup() {
 
   Serial.begin(115200);
   delay(1000);
   Serial.println("KC1FSZ");
 
+  arm_status st = arm_rfft_fast_init_f32(&FFT_Instance,1024);
+  if (st != ARM_MATH_SUCCESS) {
+    Serial.println("Problem with FFT init");
+  }
+
   cli();
 
   // Setup the I2S input
-  //AudioInputI2S_begin(); // Constructor calls being
+  AudioInputI2S_begin(); // Constructor calls being
   // Setup the I2S output
   AudioOutputI2S_begin();  
 
@@ -498,6 +509,7 @@ void setup() {
 
 void doAnalysis() {
 
+  // Simple min/max/avg analysis
   float32_t max = 0;
   float32_t min = 0;
   float32_t avg = 0;
@@ -522,6 +534,34 @@ void doAnalysis() {
   Serial.print(max);
   Serial.print(" avg= ");
   Serial.print(avg);
+  Serial.println();
+
+  // Spectral analysis
+  float32_t fft_out[1024];
+  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlock,fft_out,0);
+  // Create magnitude vector 
+  float32_t mag_out[512];
+  arm_cmplx_mag_f32(fft_out,mag_out,512);
+
+  float32_t maxMag = 0;
+  uint32_t maxBucket = 0;
+  bool maxValid = false;
+  for (uint32_t i = 1; i < 512; i++) {
+    if (!maxValid || mag_out[i] > maxMag) {
+      maxMag = mag_out[i];
+      maxBucket = i;
+      maxValid = true;
+    }
+  }
+
+  int div = (4410000 / 2) / 512;
+
+  Serial.print("Max mag=");
+  Serial.print(maxMag);
+  Serial.print(" bucket=");
+  Serial.print(maxBucket);
+  Serial.print(" freq=");
+  Serial.print(maxBucket * div / 100);
   Serial.println();
 }
 
