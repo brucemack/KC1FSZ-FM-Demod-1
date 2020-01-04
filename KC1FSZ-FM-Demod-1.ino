@@ -228,9 +228,9 @@ volatile uint32_t V = 0;
 // allowed when the head != tail.
 //
 const int TransferSize = 8;
-uint16_t Transfer[TransferSize][64];
-int TransferHead = 0;
-int TransferTail = 0;
+volatile uint16_t Transfer[TransferSize][64];
+volatile int TransferHead = 0;
+volatile int TransferTail = 0;
 
 // This is where we actually generate the transmit data.
 //
@@ -240,11 +240,10 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
-    uint32_t s_right = (Transfer[TransferTail][i] & 0xffff) << 16;
+    uint32_t s_right = (uint32_t)Transfer[TransferTail][i] << 16;
     // Ramp function
     V += 100;
-    //uint32_t s_left = (V & 0xffff);  
-    uint32_t s_left = (Transfer[TransferTail][i] & 0xffff);
+    uint32_t s_left = (V & 0xffff);  
     txBuffer[i] = s_left | s_right;
   }
 
@@ -267,7 +266,8 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     
   // Capture the data into the feedthrough buffer
   for (unsigned int i = 0; i < rxBufferSize && i < 64; i++) {
-    Transfer[TransferHead][i] = rxBuffer[i];
+    // Pull off the right channel of data
+    Transfer[TransferHead][i] = (rxBuffer[i] & 0xffff0000) >> 16;
   }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
