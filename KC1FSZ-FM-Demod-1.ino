@@ -3,9 +3,6 @@
 //
 // Bruce MacKinnon KC1FSZ
 //
-// Here is the K20 reference manual:
-// https://www.nxp.com/docs/en/reference-manual/K20P64M72SF1RM.pdf
-// 
 // For Teensy 4.0:
 // https://www.pjrc.com/teensy/IMXRT1060RM_rev1.pdf
 // 
@@ -63,6 +60,10 @@ DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size
 
 // ====== DMA Stuff ====================================================================
 
+extern "C" {
+  extern uint16_t dma_channel_allocated_mask;
+}
+
 // This structure matches the layout of the DMA Transfer Control Descriptor
 //
 struct __attribute__((packed, aligned(4))) TCD {    
@@ -108,8 +109,29 @@ struct __attribute__((packed, aligned(4))) TCD {
   };
 };
 
-struct TCD* DMAChannel_begin(uint32_t ch) {
-    
+struct TCD* DMAChannel_getTCD(uint8_t channel) {
+  return (struct TCD*)(0x400E9000 + (uint32_t)channel * 32); 
+}
+
+uint8_t DMAChannel_begin() {
+
+  // Search for available channel
+  __disable_irq();
+  uint32_t ch = 0;
+  
+  while (true) {
+    if (!(dma_channel_allocated_mask & (1 << ch))) {
+      dma_channel_allocated_mask |= (1 << ch);
+      __enable_irq();
+      break;
+    }
+    // Look for case where there are no channels available
+    if (++ch >= 16) {
+      __enable_irq();
+      return 16;
+    }
+  }
+
   // Clock control
   // Clock Gating Register 5 - Enable DMA clock
   CCM_CCGR5 |= CCM_CCGR5_DMA(CCM_CCGR_ON);
@@ -123,13 +145,13 @@ struct TCD* DMAChannel_begin(uint32_t ch) {
   DMA_CINT = ch;
 
   // Establish pointer to control structure
-  struct TCD* tcd = (struct TCD*)(0x400E9000 + ch * 32); 
+  struct TCD* tcd = DMAChannel_getTCD(ch);
   // Clear 
-  uint32_t *p = (uint32_t *)tcd;
+  uint32_t *p = (uint32_t*)tcd;
   for (int i = 0; i < 8; i++)
     *p++ = 0;
-
-  return tcd;
+    
+  return ch;
 }
 
 static void DMAChannel_triggerAtHardwareEvent(uint8_t s,uint8_t channel) {
@@ -173,12 +195,8 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
 
 AudioControlSGTL5000  sgtl5000_1;
 
-static uint8_t TX_DMA_Channel = 0;
-static uint8_t RX_DMA_Channel = 0;
-static struct TCD* TX_TCD;
-static struct TCD* RX_TCD;
-
-//const unsigned int SampleFreqHz = 44100;
+uint8_t TX_DMA_Channel;
+uint8_t RX_DMA_Channel;
 
 volatile uint32_t V = 0;
 volatile uint32_t RV = 0;
@@ -225,8 +243,9 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
 
 // Interrupt service routine from DMA controller
 void tx_dma_isr_function(void) {  
-  
-  uint32_t saddr = (uint32_t)TX_TCD->SADDR;
+
+  struct TCD* tcd = DMAChannel_getTCD(TX_DMA_Channel);
+  uint32_t saddr = (uint32_t)tcd->SADDR;
  
   // Clear interrupt request for channel
   DMAChannel_clearInterrupt(TX_DMA_Channel);
@@ -249,8 +268,9 @@ void tx_dma_isr_function(void) {
 
 // Interrupt service routine from DMA controller
 void rx_dma_isr_function(void) {  
-  
-  uint32_t daddr = (uint32_t)TX_TCD->DADDR;
+
+  struct TCD* tcd = DMAChannel_getTCD(RX_DMA_Channel);
+  uint32_t daddr = (uint32_t)tcd->DADDR;
 
   // Clear interrupt request for channel
   DMAChannel_clearInterrupt(RX_DMA_Channel);
@@ -340,14 +360,13 @@ static void AudioOutputI2S_config_i2s() {
 static void AudioOutputI2S_begin() {
 
   // Setup DMA channel, assume this gets called second
-  TX_DMA_Channel = 1;
-  TX_TCD = DMAChannel_begin(TX_DMA_Channel);
+  TX_DMA_Channel = DMAChannel_begin();
 
   AudioOutputI2S_config_i2s();
   
   CORE_PIN7_CONFIG = 3; // 1:TX_DATA0
   
-  struct TCD* tcd = TX_TCD;
+  struct TCD* tcd = DMAChannel_getTCD(TX_DMA_Channel);
   // Configure the source source buffer
   tcd->SADDR = i2s_tx_buffer;
   // Amount that the source address is adjusted after each read.  
@@ -390,8 +409,7 @@ static void AudioOutputI2S_begin() {
 static void AudioInputI2S_begin() {
 
   // We assume this takes the first DMA channel
-  RX_DMA_Channel = 0;
-  RX_TCD = DMAChannel_begin(RX_DMA_Channel);
+  RX_DMA_Channel = DMAChannel_begin();
 
   AudioOutputI2S_config_i2s();
 
@@ -399,7 +417,7 @@ static void AudioInputI2S_begin() {
   CORE_PIN8_CONFIG = 3;  
   IOMUXC_SAI1_RX_DATA0_SELECT_INPUT = 2;
   
-  struct TCD* tcd = RX_TCD;
+  struct TCD* tcd = DMAChannel_getTCD(RX_DMA_Channel);
   // Source address is the high side of the receive buffer
   tcd->SADDR = (void*)((uint32_t)&I2S1_RDR0 + 2);
   tcd->SOFF = 0;
@@ -438,6 +456,12 @@ void setup() {
   // Setup the I2S output
   AudioOutputI2S_begin();  
 
+  Serial.print("TX DMA Channel ");
+  Serial.print(TX_DMA_Channel);
+  Serial.print(", RX DMA Channel ");
+  Serial.print(RX_DMA_Channel);
+  Serial.println();
+  
   sei();
 
   delay(1000);
