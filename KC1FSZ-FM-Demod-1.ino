@@ -1,12 +1,29 @@
-// This is a very simple "hello world" test of the K20 (Teensy 4.0)
-// I2S audio output.
-//
-// Bruce MacKinnon KC1FSZ
-//
-// For Teensy 4.0:
-// https://www.pjrc.com/teensy/IMXRT1060RM_rev1.pdf
-// 
-//
+/*
+This is a very simple "hello world" test of the K20 (Teensy 4.0)
+I2S audio output.
+
+Bruce MacKinnon KC1FSZ
+
+For Teensy 4.0: https://www.pjrc.com/teensy/IMXRT1060RM_rev1.pdf
+
+NOTE: SIGNIFICANT PARTS OF THIS CODE HAVE BEEN ADAPTED FROM THE ORIGINAL
+TEENSY AUDIO LIBRARY BY PAUL STOFFREGEN.  HIS COPYRIGHT FOLLOWS BELOW:
+
+ * Copyright (c) 2014, Paul Stoffregen, paul@pjrc.com
+ *
+ * Development of this audio library was funded by PJRC.COM, LLC by sales of
+ * Teensy and Audio Adaptor boards.  Please support PJRC's efforts to develop
+ * open source software by purchasing Teensy or other PJRC products.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice, development funding notice, and this permission
+ */
 #include <Audio.h>
 
 /**
