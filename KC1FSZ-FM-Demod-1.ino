@@ -1,13 +1,12 @@
 /*
-This is a very simple "hello world" test of the K20 (Teensy 4.0)
-I2S audio output.
+FM demodulation using I/Q and other DSP techniques.
 
 Bruce MacKinnon KC1FSZ
 
 For Teensy 4.0: https://www.pjrc.com/teensy/IMXRT1060RM_rev1.pdf
 
-NOTE: SIGNIFICANT PARTS OF THIS CODE HAVE BEEN ADAPTED FROM THE ORIGINAL
-TEENSY AUDIO LIBRARY BY PAUL STOFFREGEN.  HIS COPYRIGHT FOLLOWS BELOW:
+  NOTE: SIGNIFICANT PARTS OF THE TEENSY CODE HAVE BEEN ADAPTED FROM THE ORIGINAL
+  TEENSY AUDIO LIBRARY BY PAUL STOFFREGEN.  HIS COPYRIGHT FOLLOWS BELOW:
 
  * Copyright (c) 2014, Paul Stoffregen, paul@pjrc.com
  *
@@ -221,17 +220,38 @@ uint8_t RX_DMA_Channel = 0;
 
 volatile uint32_t V = 0;
 
+// Data transfer area from RX to TX.
+// This is organized into an 8-slot circular buffer, each slot is 
+// 64 16-bit words.
+// Head points to next slot to be written and is moved forward on each write.
+// Tail points to next slot to be read and is moved forward on each read.  This is only 
+// allowed when the head != tail.
+//
+const int TransferSize = 8;
+uint16_t Transfer[TransferSize][64];
+int TransferHead = 0;
+int TransferTail = 0;
+
 // This is where we actually generate the transmit data.
 //
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
-  for (unsigned int i = 0; i < txBufferSize; i++) {
+
+  cli();
+  
+  for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
+    // We need to shift the data up to the high side of the 32-bit word
+    uint32_t s_right = (Transfer[TransferTail][i] & 0xffff) << 16;
     // Ramp function
     V += 100;
-    // We need to shift the data up to the high side of the 32-bit word
-    uint32_t s_left = 0;
-    uint32_t s_right = (V & 0xffff);    
+    uint32_t s_left = (V & 0xffff);    
     txBuffer[i] = s_left | s_right;
   }
+
+  if (++TransferTail == TransferSize) {
+    TransferTail = 0;
+  }
+  
+  sei();
 }
 
 volatile bool CaptureEnabled = false;
@@ -241,6 +261,17 @@ volatile int AnalysisBlockPtr = 0;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
+
+  cli();
+    
+  // Capture the data into the feedthrough buffer
+  for (unsigned int i = 0; i < rxBufferSize && i < 64; i++) {
+    Transfer[TransferHead][i] = rxBuffer[i];
+  }
+  if (++TransferHead == TransferSize) {
+    TransferHead = 0;
+  }
+  
   if (CaptureEnabled) {
     for (unsigned int i = 0; i < rxBufferSize; i++) {
       // Decompose into left and right channels
@@ -258,6 +289,8 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
       }
     }
   }
+  
+  sei();
 }
 
 // Interrupt service routine from DMA controller
@@ -482,12 +515,6 @@ void setup() {
   // Setup the I2S output
   AudioOutputI2S_begin();  
 
-  Serial.print("TX DMA Channel ");
-  Serial.print(TX_DMA_Channel);
-  Serial.print(", RX DMA Channel ");
-  Serial.print(RX_DMA_Channel);
-  Serial.println();
-  
   sei();
 
   delay(1000);
