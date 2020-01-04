@@ -73,7 +73,8 @@ const unsigned int rx_buffer_size = 128;
 // of the memory controller adding a wait state if the CPU and DMA want to access the same 
 // region of memory in the same clock cycle.
 DMAMEM __attribute__((aligned(32))) static uint32_t i2s_tx_buffer[tx_buffer_size];
-DMAMEM __attribute__((aligned(32))) static uint32_t i2s_rx_buffer[rx_buffer_size];
+
+static uint32_t i2s_rx_buffer[rx_buffer_size];
 
 // ====== DMA Stuff ====================================================================
 
