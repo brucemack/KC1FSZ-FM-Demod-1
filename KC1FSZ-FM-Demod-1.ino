@@ -243,7 +243,8 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
     uint32_t s_right = (Transfer[TransferTail][i] & 0xffff) << 16;
     // Ramp function
     V += 100;
-    uint32_t s_left = (V & 0xffff);    
+    //uint32_t s_left = (V & 0xffff);  
+    uint32_t s_left = (Transfer[TransferTail][i] & 0xffff);
     txBuffer[i] = s_left | s_right;
   }
 
