@@ -229,7 +229,7 @@ volatile uint32_t V = 0;
 // allowed when the head != tail.
 //
 const int TransferSize = 8;
-volatile uint16_t Transfer[TransferSize][64];
+volatile int16_t Transfer[TransferSize][64];
 volatile int TransferHead = 0;
 volatile int TransferTail = 0;
 
@@ -277,7 +277,8 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   float32_t lpf_right_data[64];
   arm_fir_f32(&LPF_Instance,right_data,lpf_right_data,64);
   
-  // Capture the data into the feedthrough buffer
+  // Capture the data into the feedthrough buffer.  
+  // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
     Transfer[TransferHead][i] = lpf_right_data[i];
   }
