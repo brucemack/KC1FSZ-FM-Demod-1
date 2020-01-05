@@ -61,7 +61,9 @@ void set_audioClock2(int nfact, int32_t nmult, uint32_t ndiv, bool force = false
   CCM_ANALOG_PLL_AUDIO &= ~CCM_ANALOG_PLL_AUDIO_BYPASS;//Disable Bypass
 }
 
-// This is the size of the buffer used for DMA transmit operations
+// This is the size of the buffer used for DMA transmit/receive operations.
+// This needs to be twice the block size since the interrupt will be configured
+// to fire at the half-way mark.
 const unsigned int tx_buffer_size = 128;
 const unsigned int rx_buffer_size = 128;
 
@@ -127,6 +129,9 @@ struct __attribute__((packed, aligned(4))) TCD {
   };
 };
 
+/**
+ * Gets the TCD structure for the specified channel.
+ */
 struct TCD* DMAChannel_getTCD(uint8_t channel) {
   return (struct TCD*)(0x400E9000 + (uint32_t)channel * 32); 
 }
@@ -138,6 +143,7 @@ uint8_t DMAChannel_begin() {
 
   // Search for available channel
   __disable_irq();
+  
   uint32_t ch = 0;
   
   while (true) {
@@ -167,9 +173,10 @@ uint8_t DMAChannel_begin() {
 
   // Clear control structure
   struct TCD* tcd = DMAChannel_getTCD(ch);
-  uint32_t *p = (uint32_t*)tcd;
-  for (int i = 0; i < 8; i++)
-    *p++ = 0;
+  //uint32_t *p = (uint32_t*)tcd;
+  //for (int i = 0; i < 8; i++)
+  //  *p++ = 0;
+  memset((void*)tcd,0,32);
     
   return ch;
 }
@@ -219,8 +226,6 @@ AudioControlSGTL5000  sgtl5000_1;
 uint8_t TX_DMA_Channel = 0;
 uint8_t RX_DMA_Channel = 0;
 
-volatile uint32_t V = 0;
-
 // Data transfer area from RX to TX.
 // This is organized into an 8-slot circular buffer, each slot is 
 // 64 16-bit words.
@@ -242,9 +247,7 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
     uint32_t s_right = (uint32_t)Transfer[TransferTail][i] << 16;
-    // Ramp function
-    V += 100;
-    uint32_t s_left = (V & 0xffff);  
+    uint32_t s_left = 0;  
     txBuffer[i] = s_left | s_right;
   }
 
