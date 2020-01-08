@@ -253,7 +253,7 @@ uint8_t RX_DMA_Channel = 0;
 // Tail points to next slot to be read and is moved forward on each read.  This is only 
 // allowed when the head != tail.
 //
-const int TransferSize = 4;
+const int TransferSize = 8;
 volatile int16_t TransferL[TransferSize][64];
 volatile int16_t TransferR[TransferSize][64];
 volatile int TransferHead = 0;
@@ -761,7 +761,7 @@ void setup() {
 
   sei();
 
-  delay(250);
+  delay(1000);
   
   sgtl5000_1.enable();
   sgtl5000_1.volume(0.5);
@@ -774,6 +774,8 @@ void setup() {
 }
 
 void doAnalysis() {
+
+  cli();
 
   // Simple min/max/avg analysis
   float32_t leftMax = 0;
@@ -805,6 +807,8 @@ void doAnalysis() {
   }
   rightAvg /= 1024.0;
 
+  sei();
+
   Serial.print("Stats:");
   Serial.print(" left_min= ");
   Serial.print(leftMin);
@@ -820,12 +824,16 @@ void doAnalysis() {
   Serial.print(rightAvg);
   Serial.println();
 
+  cli();
+  
   // Spectral analysis
   float32_t leftFftOut[1024];
   arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockL,leftFftOut,0);
   float32_t rightFftOut[1024];
   arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockR,rightFftOut,0);
 
+  sei();
+  
   // Create magnitude vectors 
   float32_t leftMagOut[512];
   arm_cmplx_mag_f32(leftFftOut,leftMagOut,512);
@@ -878,13 +886,11 @@ volatile long lastDisplay = 0;
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
-    cli();
     if (AnalysisBlockAvailable) {
       doAnalysis();
       AnalysisBlockAvailable = false;   
       // Start on a new one
       CaptureEnabled = true;
     } 
-    sei();
   }
 }
