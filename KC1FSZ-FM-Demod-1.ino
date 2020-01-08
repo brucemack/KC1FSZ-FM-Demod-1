@@ -755,13 +755,13 @@ void setup() {
   cli();
 
   // Setup the I2S input
-  AudioInputI2S_begin(); // Constructor calls being
+  AudioInputI2S_begin();
   // Setup the I2S output
   AudioOutputI2S_begin();  
 
   sei();
 
-  delay(1000);
+  delay(250);
   
   sgtl5000_1.enable();
   sgtl5000_1.volume(0.5);
@@ -804,7 +804,6 @@ void doAnalysis() {
     }
   }
   rightAvg /= 1024.0;
-
 
   Serial.print("Stats:");
   Serial.print(" left_min= ");
