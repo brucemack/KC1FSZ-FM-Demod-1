@@ -220,6 +220,26 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
+class DelayLine {
+public:
+
+  void process(float32_t* input,float32_t* output) {
+      // Recycle the oldest entry
+      output[0] = _state;
+      for (int i = 0; i < _blockSize - 1; i++) {
+        output[i+1] = input[i];
+      }
+      // The newest entry in the input gets saved for the next block
+      _state = input[_blockSize - 1];
+  }
+
+private:
+
+  int _blockSize = 64;
+  float32_t _state;
+};
+
+
 // TODO: GET RID OF THIS
 AudioControlSGTL5000  sgtl5000_1;
 
@@ -233,8 +253,9 @@ uint8_t RX_DMA_Channel = 0;
 // Tail points to next slot to be read and is moved forward on each read.  This is only 
 // allowed when the head != tail.
 //
-const int TransferSize = 8;
-volatile int16_t Transfer[TransferSize][64];
+const int TransferSize = 4;
+volatile int16_t TransferL[TransferSize][64];
+volatile int16_t TransferR[TransferSize][64];
 volatile int TransferHead = 0;
 volatile int TransferTail = 0;
 
@@ -246,8 +267,8 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
-    uint32_t s_right = (uint32_t)Transfer[TransferTail][i] << 16;
-    uint32_t s_left = 0;  
+    uint32_t s_right = (uint32_t)TransferR[TransferTail][i] << 16;
+    uint32_t s_left = (uint32_t)TransferL[TransferTail][i];
     txBuffer[i] = s_left | s_right;
   }
 
@@ -260,8 +281,10 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
 
 volatile bool CaptureEnabled = false;
 volatile bool AnalysisBlockAvailable = false;
-volatile float32_t AnalysisBlock[1024];
 volatile int AnalysisBlockPtr = 0;
+volatile float32_t AnalysisBlockL[1024];
+volatile float32_t AnalysisBlockR[1024];
+
 static arm_fir_instance_f32 LPF_Instance;
 
 // This is where we actually consume the receive data.
@@ -275,15 +298,12 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     left_data[i] = (int16_t)(rxBuffer[i] & 0xffff);
     right_data[i] = (int16_t)((rxBuffer[i] & 0xffff0000) >> 16);
   }
-
-  // Apply the LPF to the right side
-  float32_t lpf_right_data[64];
-  arm_fir_f32(&LPF_Instance,right_data,lpf_right_data,64);
   
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
-    Transfer[TransferHead][i] = lpf_right_data[i];
+    TransferL[TransferHead][i] = left_data[i];
+    TransferR[TransferHead][i] = right_data[i];
   }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
@@ -292,12 +312,13 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   if (CaptureEnabled) {
     for (unsigned int i = 0; i < rxBufferSize; i++) {
       // Decompose into left and right channels
-      uint16_t right = (rxBuffer[i] & 0xffff0000) >> 16;
-      int16_t rightSigned = right;
       uint16_t left = (rxBuffer[i] & 0x0000ffff);
       int16_t leftSigned = left;
+      uint16_t right = (rxBuffer[i] & 0xffff0000) >> 16;
+      int16_t rightSigned = right;
  
-      AnalysisBlock[AnalysisBlockPtr] = rightSigned;
+      AnalysisBlockL[AnalysisBlockPtr] = leftSigned;
+      AnalysisBlockR[AnalysisBlockPtr] = rightSigned;
       AnalysisBlockPtr++;
       if (AnalysisBlockPtr == 1024) {
         CaptureEnabled = false;
@@ -515,7 +536,7 @@ static void AudioInputI2S_begin() {
 arm_rfft_fast_instance_f32 FFT_Instance;
 float32_t LPF_State[64+201-1];
 
-const float32_t LPF_Taps[201] = {
+const float32_t LPF_Taps[201] = {43
   -0.0021825804630864584 ,
   0.014877842757177167 ,
   0.002931680946469297 ,
@@ -755,56 +776,101 @@ void setup() {
 void doAnalysis() {
 
   // Simple min/max/avg analysis
-  float32_t max = 0;
-  float32_t min = 0;
-  float32_t avg = 0;
-
+  float32_t leftMax = 0;
+  float32_t leftMin = 0;
+  float32_t leftAvg = 0;
   for (unsigned int i = 0; i < 1024; i++) {
-    avg += AnalysisBlock[i];
-    if (max == 0 || AnalysisBlock[i] > max) {
-      max = AnalysisBlock[i];
+    leftAvg += AnalysisBlockL[i];
+    if (leftMax == 0 || AnalysisBlockL[i] > leftMax) {
+      leftMax = AnalysisBlockL[i];
     }
-    if (min == 0 || AnalysisBlock[i] < min) {
-      min = AnalysisBlock[i];
+    if (leftMin == 0 || AnalysisBlockL[i] < leftMin) {
+      leftMin = AnalysisBlockL[i];
     }
   }
+  leftAvg /= 1024.0;
 
-  avg /= 1024.0;
+  // Simple min/max/avg analysis
+  float32_t rightMax = 0;
+  float32_t rightMin = 0;
+  float32_t rightAvg = 0;
+  for (unsigned int i = 0; i < 1024; i++) {
+    rightAvg += AnalysisBlockR[i];
+    if (rightMax == 0 || AnalysisBlockR[i] > rightMax) {
+      rightMax = AnalysisBlockR[i];
+    }
+    if (rightMin == 0 || AnalysisBlockR[i] < rightMin) {
+      rightMin = AnalysisBlockR[i];
+    }
+  }
+  rightAvg /= 1024.0;
 
-  Serial.print("Stats: min= ");
-  Serial.print(min);
-  Serial.print(" max= ");
-  Serial.print(max);
-  Serial.print(" avg= ");
-  Serial.print(avg);
+
+  Serial.print("Stats:");
+  Serial.print(" left_min= ");
+  Serial.print(leftMin);
+  Serial.print(" left_max= ");
+  Serial.print(leftMax);
+  Serial.print(" left_avg= ");
+  Serial.print(leftAvg);
+  Serial.print(" right_min= ");
+  Serial.print(rightMin);
+  Serial.print(" right_max= ");
+  Serial.print(rightMax);
+  Serial.print(" right_avg= ");
+  Serial.print(rightAvg);
   Serial.println();
 
   // Spectral analysis
-  float32_t fft_out[1024];
-  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlock,fft_out,0);
-  // Create magnitude vector 
-  float32_t mag_out[512];
-  arm_cmplx_mag_f32(fft_out,mag_out,512);
+  float32_t leftFftOut[1024];
+  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockL,leftFftOut,0);
+  float32_t rightFftOut[1024];
+  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockR,rightFftOut,0);
 
-  float32_t maxMag = 0;
-  uint32_t maxBucket = 0;
-  bool maxValid = false;
+  // Create magnitude vectors 
+  float32_t leftMagOut[512];
+  arm_cmplx_mag_f32(leftFftOut,leftMagOut,512);
+  float32_t rightMagOut[512];
+  arm_cmplx_mag_f32(rightFftOut,rightMagOut,512);
+
+  float32_t leftMaxMag = 0;
+  uint32_t leftMaxBucket = 0;
+  bool leftMaxValid = false;
+  
   for (uint32_t i = 1; i < 512; i++) {
-    if (!maxValid || mag_out[i] > maxMag) {
-      maxMag = mag_out[i];
-      maxBucket = i;
-      maxValid = true;
+    if (!leftMaxValid || leftMagOut[i] > leftMaxMag) {
+      leftMaxMag = leftMagOut[i];
+      leftMaxBucket = i;
+      leftMaxValid = true;
+    }
+  }
+
+  float32_t rightMaxMag = 0;
+  uint32_t rightMaxBucket = 0;
+  bool rightMaxValid = false;
+  
+  for (uint32_t i = 1; i < 512; i++) {
+    if (!rightMaxValid || rightMagOut[i] > rightMaxMag) {
+      rightMaxMag = rightMagOut[i];
+      rightMaxBucket = i;
+      rightMaxValid = true;
     }
   }
 
   int div = (4410000 / 2) / 512;
 
-  Serial.print("Spectral Max mag=");
-  Serial.print(maxMag / 1024.0);
-  Serial.print(" bucket=");
-  Serial.print(maxBucket);
-  Serial.print(" freq=");
-  Serial.print(maxBucket * div / 100);
+  Serial.print("Spectral Max");
+  
+  Serial.print(" left_mag=");
+  Serial.print(leftMaxMag / 1024.0);
+  Serial.print(" left_freq=");
+  Serial.print(leftMaxBucket * div / 100);
+
+  Serial.print("| right_mag=");
+  Serial.print(rightMaxMag / 1024.0);
+  Serial.print(" right_freq=");
+  Serial.print(rightMaxBucket * div / 100);
+  
   Serial.println();
 }
 
