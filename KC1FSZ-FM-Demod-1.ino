@@ -220,8 +220,32 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
+void diff(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+  for (int i = 0; i < blockSize; i++) {
+    r[i] = a[i] - b[i];
+  }
+}
+
+void sum(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+  for (int i = 0; i < blockSize; i++) {
+    r[i] = a[i] + b[i];
+  }
+}
+
+void mult(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+  for (int i = 0; i < blockSize; i++) {
+    r[i] = a[i] * b[i];
+  }
+}
+
+/**
+ * Used to implement a one tap delay across a block of samples
+ */
 class DelayLine {
 public:
+
+  DelayLine(int blockSize) : _blockSize(blockSize), _state(0) {
+  }
 
   void process(float32_t* input,float32_t* output) {
       // Recycle the oldest entry
@@ -235,10 +259,9 @@ public:
 
 private:
 
-  int _blockSize = 64;
+  const int _blockSize;
   float32_t _state;
 };
-
 
 // TODO: GET RID OF THIS
 AudioControlSGTL5000  sgtl5000_1;
@@ -263,8 +286,6 @@ volatile int TransferTail = 0;
 //
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
 
-  cli();
-  
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
     uint32_t s_right = (uint32_t)TransferR[TransferTail][i] << 16;
@@ -275,8 +296,6 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   if (++TransferTail == TransferSize) {
     TransferTail = 0;
   }
-  
-  sei();
 }
 
 volatile bool CaptureEnabled = false;
@@ -284,13 +303,17 @@ volatile bool AnalysisBlockAvailable = false;
 volatile int AnalysisBlockPtr = 0;
 volatile float32_t AnalysisBlockL[1024];
 volatile float32_t AnalysisBlockR[1024];
+volatile int AnalysisSide = 0; 
 
 static arm_fir_instance_f32 LPF_Instance;
 
+static DelayLine Delay_I1(64);
+static DelayLine Delay_I2(64);
+static DelayLine Delay_Q1(64);
+static DelayLine Delay_Q2(64);
+
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
-
-  cli();
 
   // Make left and right channels from what came in via DMA
   float32_t left_data[64], right_data[64];
@@ -298,37 +321,34 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     left_data[i] = (int16_t)(rxBuffer[i] & 0xffff);
     right_data[i] = (int16_t)((rxBuffer[i] & 0xffff0000) >> 16);
   }
+
+  float32_t i1[64],i2[64],q1[64],q2[64];
+  float32_t a1[64],a2[64],b1[64],b2[64];
+  float32_t r[64];
+
+  Delay_I1.process(left_data,i1);
+  Delay_I2.process(i1,i2);
   
+  Delay_Q1.process(right_data,q1);
+  Delay_Q2.process(q1,q2);
+
+  diff(left_data,i2,a1,64);
+  diff(right_data,q2,a2,64);
+
+  mult(i1,a2,b1,64);
+  mult(q1,a1,b2,64);
+  
+  sum(b1,b2,r,64);
+
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
-    TransferL[TransferHead][i] = left_data[i];
-    TransferR[TransferHead][i] = right_data[i];
+    TransferL[TransferHead][i] = r[i];
+    //TransferR[TransferHead][i] = right_data[i];
   }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
-  
-  if (CaptureEnabled) {
-    for (unsigned int i = 0; i < rxBufferSize; i++) {
-      // Decompose into left and right channels
-      uint16_t left = (rxBuffer[i] & 0x0000ffff);
-      int16_t leftSigned = left;
-      uint16_t right = (rxBuffer[i] & 0xffff0000) >> 16;
-      int16_t rightSigned = right;
- 
-      AnalysisBlockL[AnalysisBlockPtr] = leftSigned;
-      AnalysisBlockR[AnalysisBlockPtr] = rightSigned;
-      AnalysisBlockPtr++;
-      if (AnalysisBlockPtr == 1024) {
-        CaptureEnabled = false;
-        AnalysisBlockAvailable = true;
-        AnalysisBlockPtr = 0;
-      }
-    }
-  }
-  
-  sei();
 }
 
 // Interrupt service routine from DMA controller
