@@ -220,25 +220,25 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
-void vector_diff(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_diff(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] - b[i];
   }
 }
 
-void vector_sum(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_sum(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] + b[i];
   }
 }
 
-void vector_mult(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_mult(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] * b[i];
   }
 }
 
-void vector_scale(float32_t* a,float32_t b,float32_t* r,int blockSize) {
+void vector_scale(const float32_t* a,float32_t b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] * b;
   }
@@ -304,21 +304,13 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   }
 }
 
-volatile bool CaptureEnabled = false;
-volatile bool AnalysisBlockAvailable = false;
-volatile int AnalysisBlockPtr = 0;
-volatile float32_t AnalysisBlockL[1024];
-volatile float32_t AnalysisBlockR[1024];
-volatile int AnalysisSide = 0; 
-
-static arm_fir_instance_f32 LPF_Instance;
-
 static DelayLine Delay_I1(64);
 static DelayLine Delay_I2(64);
 static DelayLine Delay_Q1(64);
 static DelayLine Delay_Q2(64);
 
 static float32_t amp = 1.0;
+static bool flip = false;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
@@ -326,8 +318,13 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   // Make left and right channels from what came in via DMA
   float32_t left_data[64], right_data[64];
   for (unsigned int i = 0; i < rxBufferSize && i < 64; i++) {
-    left_data[i] = (int16_t)(rxBuffer[i] & 0xffff);
-    right_data[i] = (int16_t)((rxBuffer[i] & 0xffff0000) >> 16);
+    if (flip) {
+      right_data[i] = (int16_t)(rxBuffer[i] & 0xffff);
+      left_data[i] = (int16_t)((rxBuffer[i] & 0xffff0000) >> 16);
+    } else {
+      left_data[i] = (int16_t)(rxBuffer[i] & 0xffff);
+      right_data[i] = (int16_t)((rxBuffer[i] & 0xffff0000) >> 16);
+    }
   }
 
   float32_t i1[64],i2[64],q1[64],q2[64];
@@ -346,13 +343,13 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   vector_mult(i1,a2,b1,64);
   vector_mult(q1,a1,b2,64);
   
-  vector_sum(b1,b2,r,64);
+  vector_diff(b1,b2,r,64);
 
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
     TransferL[TransferHead][i] = r[i] * amp;
-    //TransferR[TransferHead][i] = right_data[i];
+    TransferR[TransferHead][i] = 0;
   }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
@@ -560,212 +557,6 @@ static void AudioInputI2S_begin() {
   DMAChannel_enable(RX_DMA_Channel);
   DMAChannel_attachInterrupt(RX_DMA_Channel,rx_dma_isr_function);
 }
-
-arm_rfft_fast_instance_f32 FFT_Instance;
-float32_t LPF_State[64+201-1];
-
-const float32_t LPF_Taps[201] = {43
-  -0.0021825804630864584 ,
-  0.014877842757177167 ,
-  0.002931680946469297 ,
-  -0.00045723349767659723 ,
-  -0.0016317942082258437 ,
-  -0.0005903306753931702 ,
-  0.001274251121430665 ,
-  0.0016690295810135502 ,
-  2.2792272679338813e-05 ,
-  -0.001737999488941094 ,
-  -0.001443499831885618 ,
-  0.0006490351286811217 ,
-  0.0020493176319479074 ,
-  0.0009907948674766935 ,
-  -0.0013458281191702592 ,
-  -0.0021422035353976976 ,
-  -0.0003346606356218947 ,
-  0.001978298268115631 ,
-  0.0019676567070739063 ,
-  -0.00047294265915399697 ,
-  -0.0024548845442167663 ,
-  -0.0015083102495319742 ,
-  0.0013473230609561578 ,
-  0.002685938176531039 ,
-  0.0007771219492208337 ,
-  -0.002185949263387064 ,
-  -0.002604679306198569 ,
-  0.00017120661021703253 ,
-  0.0028768522492100567 ,
-  0.0021690474453561256 ,
-  -0.0012523139983631978 ,
-  -0.0032995129258213936 ,
-  -0.0013811109072176058 ,
-  0.002340996722602532 ,
-  0.003363820410301346 ,
-  0.00028424994868475855 ,
-  -0.0033020947339317394 ,
-  -0.002995356313329252 ,
-  0.001026028307068035 ,
-  0.00398625673457576 ,
-  0.0021764839275620557 ,
-  -0.00241454184750091 ,
-  -0.004262525297924699 ,
-  -0.0009417361530466481 ,
-  0.0037162471314942103 ,
-  0.0040311125720681445 ,
-  -0.0006200059802246392 ,
-  -0.004754101696500414 ,
-  -0.0032386824326710146 ,
-  0.002367803049410573 ,
-  0.005353905993676047 ,
-  0.0018880095666554033 ,
-  -0.004115995510494866 ,
-  -0.005360135739085063 ,
-  -4.694614753296915e-05 ,
-  0.005648464556233539 ,
-  0.0046622199648200914 ,
-  -0.002151668262362841 ,
-  -0.00669340165147966 ,
-  -0.0032295294591903625 ,
-  0.004471701312717212 ,
-  0.00709960144540818 ,
-  0.001078329499274744 ,
-  -0.006679600681953499 ,
-  -0.006639232537105003 ,
-  0.0016623014930160186 ,
-  0.008472667336306973 ,
-  0.0052035406395631355 ,
-  -0.004787253798267356 ,
-  -0.009545504324071023 ,
-  -0.0027408991203198567 ,
-  0.008012236393587682 ,
-  0.009591764201242945 ,
-  -0.0007256899969452688 ,
-  -0.011010584426899851 ,
-  -0.008369187761021113 ,
-  0.005039687737309171 ,
-  0.013354599118410283 ,
-  0.005623187528833801 ,
-  -0.010009262240112417 ,
-  -0.014614556371602059 ,
-  -0.0011649532240763502 ,
-  0.015342428540737484 ,
-  0.01427499126790685 ,
-  -0.005228557116139138 ,
-  -0.02070087361262177 ,
-  -0.011701245151319843 ,
-  0.013918143226853705 ,
-  0.025736694575548055 ,
-  0.005886187307820263 ,
-  -0.025802305673919924 ,
-  -0.03008130128105119 ,
-  0.005346325737187243 ,
-  0.04362865279230083 ,
-  0.03343801823902569 ,
-  -0.029194865114105562 ,
-  -0.07930907033041423 ,
-  -0.03555794902907878 ,
-  0.11625011210872932 ,
-  0.29195759086921147 ,
-  0.3696161796068215 ,
-  0.29195759086921147 ,
-  0.11625011210872932 ,
-  -0.03555794902907878 ,
-  -0.07930907033041423 ,
-  -0.029194865114105562 ,
-  0.03343801823902569 ,
-  0.04362865279230083 ,
-  0.005346325737187243 ,
-  -0.03008130128105119 ,
-  -0.025802305673919924 ,
-  0.005886187307820263 ,
-  0.025736694575548055 ,
-  0.013918143226853705 ,
-  -0.011701245151319843 ,
-  -0.02070087361262177 ,
-  -0.005228557116139138 ,
-  0.01427499126790685 ,
-  0.015342428540737484 ,
-  -0.0011649532240763502 ,
-  -0.014614556371602059 ,
-  -0.010009262240112417 ,
-  0.005623187528833801 ,
-  0.013354599118410283 ,
-  0.005039687737309171 ,
-  -0.008369187761021113 ,
-  -0.011010584426899851 ,
-  -0.0007256899969452688 ,
-  0.009591764201242945 ,
-  0.008012236393587682 ,
-  -0.0027408991203198567 ,
-  -0.009545504324071023 ,
-  -0.004787253798267356 ,
-  0.0052035406395631355 ,
-  0.008472667336306973 ,
-  0.0016623014930160186 ,
-  -0.006639232537105003 ,
-  -0.006679600681953499 ,
-  0.001078329499274744 ,
-  0.00709960144540818 ,
-  0.004471701312717212 ,
-  -0.0032295294591903625 ,
-  -0.00669340165147966 ,
-  -0.002151668262362841 ,
-  0.0046622199648200914 ,
-  0.005648464556233539 ,
-  -4.694614753296915e-05 ,
-  -0.005360135739085063 ,
-  -0.004115995510494866 ,
-  0.0018880095666554033 ,
-  0.005353905993676047 ,
-  0.002367803049410573 ,
-  -0.0032386824326710146 ,
-  -0.004754101696500414 ,
-  -0.0006200059802246392 ,
-  0.0040311125720681445 ,
-  0.0037162471314942103 ,
-  -0.0009417361530466481 ,
-  -0.004262525297924699 ,
-  -0.00241454184750091 ,
-  0.0021764839275620557 ,
-  0.00398625673457576 ,
-  0.001026028307068035 ,
-  -0.002995356313329252 ,
-  -0.0033020947339317394 ,
-  0.00028424994868475855 ,
-  0.003363820410301346 ,
-  0.002340996722602532 ,
-  -0.0013811109072176058 ,
-  -0.0032995129258213936 ,
-  -0.0012523139983631978 ,
-  0.0021690474453561256 ,
-  0.0028768522492100567 ,
-  0.00017120661021703253 ,
-  -0.002604679306198569 ,
-  -0.002185949263387064 ,
-  0.0007771219492208337 ,
-  0.002685938176531039 ,
-  0.0013473230609561578 ,
-  -0.0015083102495319742 ,
-  -0.0024548845442167663 ,
-  -0.00047294265915399697 ,
-  0.0019676567070739063 ,
-  0.001978298268115631 ,
-  -0.0003346606356218947 ,
-  -0.0021422035353976976 ,
-  -0.0013458281191702592 ,
-  0.0009907948674766935 ,
-  0.0020493176319479074 ,
-  0.0006490351286811217 ,
-  -0.001443499831885618 ,
-  -0.001737999488941094 ,
-  2.2792272679338813e-05 ,
-  0.0016690295810135502 ,
-  0.001274251121430665 ,
-  -0.0005903306753931702 ,
-  -0.0016317942082258437 ,
-  -0.00045723349767659723 ,
-  0.002931680946469297 ,
-  0.014877842757177167 ,
-  -0.0021825804630864584 };
   
 void setup() {
 
@@ -773,21 +564,10 @@ void setup() {
   delay(1000);
   Serial.println("KC1FSZ");
 
-  arm_status st = arm_rfft_fast_init_f32(&FFT_Instance,1024);
-  if (st != ARM_MATH_SUCCESS) {
-    Serial.println("Problem with FFT init");
-  }
-
-  arm_fir_init_f32(&LPF_Instance,201,(float32_t*)LPF_Taps,LPF_State,64);
-
-  cli();
-
   // Setup the I2S input
   AudioInputI2S_begin();
   // Setup the I2S output
   AudioOutputI2S_begin();  
-
-  sei();
 
   delay(1000);
   
@@ -795,118 +575,8 @@ void setup() {
   sgtl5000_1.volume(0.5);
   sgtl5000_1.inputSelect(AUDIO_INPUT_LINEIN);
   sgtl5000_1.lineInLevel(8);
-
-  CaptureEnabled = true;
   
   Serial.println("setup() done");
-}
-
-void doAnalysis() {
-
-  cli();
-
-  // Simple min/max/avg analysis
-  float32_t leftMax = 0;
-  float32_t leftMin = 0;
-  float32_t leftAvg = 0;
-  for (unsigned int i = 0; i < 1024; i++) {
-    leftAvg += AnalysisBlockL[i];
-    if (leftMax == 0 || AnalysisBlockL[i] > leftMax) {
-      leftMax = AnalysisBlockL[i];
-    }
-    if (leftMin == 0 || AnalysisBlockL[i] < leftMin) {
-      leftMin = AnalysisBlockL[i];
-    }
-  }
-  leftAvg /= 1024.0;
-
-  // Simple min/max/avg analysis
-  float32_t rightMax = 0;
-  float32_t rightMin = 0;
-  float32_t rightAvg = 0;
-  for (unsigned int i = 0; i < 1024; i++) {
-    rightAvg += AnalysisBlockR[i];
-    if (rightMax == 0 || AnalysisBlockR[i] > rightMax) {
-      rightMax = AnalysisBlockR[i];
-    }
-    if (rightMin == 0 || AnalysisBlockR[i] < rightMin) {
-      rightMin = AnalysisBlockR[i];
-    }
-  }
-  rightAvg /= 1024.0;
-
-  sei();
-
-  Serial.print("Stats:");
-  Serial.print(" left_min= ");
-  Serial.print(leftMin);
-  Serial.print(" left_max= ");
-  Serial.print(leftMax);
-  Serial.print(" left_avg= ");
-  Serial.print(leftAvg);
-  Serial.print(" right_min= ");
-  Serial.print(rightMin);
-  Serial.print(" right_max= ");
-  Serial.print(rightMax);
-  Serial.print(" right_avg= ");
-  Serial.print(rightAvg);
-  Serial.println();
-
-  cli();
-  
-  // Spectral analysis
-  float32_t leftFftOut[1024];
-  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockL,leftFftOut,0);
-  float32_t rightFftOut[1024];
-  arm_rfft_fast_f32(&FFT_Instance,(float32_t*)AnalysisBlockR,rightFftOut,0);
-
-  sei();
-  
-  // Create magnitude vectors 
-  float32_t leftMagOut[512];
-  arm_cmplx_mag_f32(leftFftOut,leftMagOut,512);
-  float32_t rightMagOut[512];
-  arm_cmplx_mag_f32(rightFftOut,rightMagOut,512);
-
-  float32_t leftMaxMag = 0;
-  uint32_t leftMaxBucket = 0;
-  bool leftMaxValid = false;
-  
-  for (uint32_t i = 1; i < 512; i++) {
-    if (!leftMaxValid || leftMagOut[i] > leftMaxMag) {
-      leftMaxMag = leftMagOut[i];
-      leftMaxBucket = i;
-      leftMaxValid = true;
-    }
-  }
-
-  float32_t rightMaxMag = 0;
-  uint32_t rightMaxBucket = 0;
-  bool rightMaxValid = false;
-  
-  for (uint32_t i = 1; i < 512; i++) {
-    if (!rightMaxValid || rightMagOut[i] > rightMaxMag) {
-      rightMaxMag = rightMagOut[i];
-      rightMaxBucket = i;
-      rightMaxValid = true;
-    }
-  }
-
-  int div = (4410000 / 2) / 512;
-
-  Serial.print("Spectral Max");
-  
-  Serial.print(" left_mag=");
-  Serial.print(leftMaxMag / 1024.0);
-  Serial.print(" left_freq=");
-  Serial.print(leftMaxBucket * div / 100);
-
-  Serial.print("| right_mag=");
-  Serial.print(rightMaxMag / 1024.0);
-  Serial.print(" right_freq=");
-  Serial.print(rightMaxBucket * div / 100);
-  
-  Serial.println();
 }
 
 volatile long lastDisplay = 0;
@@ -914,11 +584,5 @@ volatile long lastDisplay = 0;
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
-    if (AnalysisBlockAvailable) {
-      doAnalysis();
-      AnalysisBlockAvailable = false;   
-      // Start on a new one
-      CaptureEnabled = true;
-    } 
   }
 }
