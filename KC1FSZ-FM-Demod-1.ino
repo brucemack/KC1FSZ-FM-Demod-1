@@ -220,21 +220,27 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
-void diff(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_diff(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] - b[i];
   }
 }
 
-void sum(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_sum(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] + b[i];
   }
 }
 
-void mult(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
+void vector_mult(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
     r[i] = a[i] * b[i];
+  }
+}
+
+void vector_scale(float32_t* a,float32_t b,float32_t* r,int blockSize) {
+  for (int i = 0; i < blockSize; i++) {
+    r[i] = a[i] * scale;
   }
 }
 
@@ -312,6 +318,8 @@ static DelayLine Delay_I2(64);
 static DelayLine Delay_Q1(64);
 static DelayLine Delay_Q2(64);
 
+static float32_t amp = 1.0;
+
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
 
@@ -332,20 +340,18 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   Delay_Q1.process(right_data,q1);
   Delay_Q2.process(q1,q2);
 
-  diff(left_data,i2,a1,64);
-  diff(right_data,q2,a2,64);
+  vector_diff(left_data,i2,a1,64);
+  vector_diff(right_data,q2,a2,64);
 
-  mult(i1,a2,b1,64);
-  mult(q1,a1,b2,64);
+  vector_mult(i1,a2,b1,64);
+  vector_mult(q1,a1,b2,64);
   
-  sum(b1,b2,r,64);
+  vector_sum(b1,b2,r,64);
 
-  // Capture the data into the feedthrough buffer.  
-  // This is a signed float32 being written into a signed int16
-  for (unsigned int i = 0; i < 64; i++) {
-    TransferL[TransferHead][i] = r[i];
-    //TransferR[TransferHead][i] = right_data[i];
-  }
+  // Scale and capture the data into the feedthrough buffer.  
+  vector_scale(r,amp,TransferL[TransferHead],64);
+
+  // Rotate 
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
