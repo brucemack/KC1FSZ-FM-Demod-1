@@ -240,7 +240,7 @@ void vector_mult(float32_t* a,float32_t* b,float32_t* r,int blockSize) {
 
 void vector_scale(float32_t* a,float32_t b,float32_t* r,int blockSize) {
   for (int i = 0; i < blockSize; i++) {
-    r[i] = a[i] * scale;
+    r[i] = a[i] * b;
   }
 }
 
@@ -348,10 +348,12 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   
   vector_sum(b1,b2,r,64);
 
-  // Scale and capture the data into the feedthrough buffer.  
-  vector_scale(r,amp,TransferL[TransferHead],64);
-
-  // Rotate 
+  // Capture the data into the feedthrough buffer.  
+  // This is a signed float32 being written into a signed int16
+  for (unsigned int i = 0; i < 64; i++) {
+    TransferL[TransferHead][i] = r[i] * amp;
+    //TransferR[TransferHead][i] = right_data[i];
+  }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
