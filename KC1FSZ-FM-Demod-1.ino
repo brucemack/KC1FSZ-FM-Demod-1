@@ -220,30 +220,6 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
   DMA_CINT = channel;
 }
 
-void vector_diff(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
-  for (int i = 0; i < blockSize; i++) {
-    r[i] = a[i] - b[i];
-  }
-}
-
-void vector_sum(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
-  for (int i = 0; i < blockSize; i++) {
-    r[i] = a[i] + b[i];
-  }
-}
-
-void vector_mult(const float32_t* a,const float32_t* b,float32_t* r,int blockSize) {
-  for (int i = 0; i < blockSize; i++) {
-    r[i] = a[i] * b[i];
-  }
-}
-
-void vector_scale(const float32_t* a,float32_t b,float32_t* r,int blockSize) {
-  for (int i = 0; i < blockSize; i++) {
-    r[i] = a[i] * b;
-  }
-}
-
 /**
  * Used to implement a one tap delay across a block of samples
  */
@@ -294,7 +270,7 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
     uint32_t s_right = ((uint32_t)TransferR[TransferTail][i] << 16) & 0xffff0000;
-    // Careful! This is getting sign-extended during conversion
+    // Careful! This is getting sign-extended during conversion so we need to mask off the high bits
     uint32_t s_left = ((uint32_t)TransferL[TransferTail][i]) & 0x0000ffff;
     txBuffer[i] = s_left | s_right;
   }
@@ -308,12 +284,11 @@ static DelayLine Delay_I2(64);
 static DelayLine Delay_Q1(64);
 static DelayLine Delay_Q2(64);
 
-static float32_t amp = 1.0;
+static float32_t amp = 1.0 / 4000.0;
 static bool flip = false;
 
 static float32_t minL = 0;
 static float32_t maxL = 0;
-
 static float32_t minR = 0;
 static float32_t maxR = 0;
 
@@ -332,18 +307,19 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     }
   }
 
+  // Analysis
   minL = 0;
   maxL = 0;
   minR = 0;
   maxR = 0;
-
   for (int i = 0; i < 64; i++) {
     minL = min(minL,left_data[i]);
     maxL = max(maxL,left_data[i]);
     minR = min(minR,right_data[i]);
     maxR = max(maxR,right_data[i]);
   }
-  
+
+  /*
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
@@ -353,9 +329,8 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
-
+  */
   
-  /*
   float32_t i1[64],i2[64],q1[64],q2[64];
   float32_t a1[64],a2[64],b1[64],b2[64];
   float32_t r[64];
@@ -366,24 +341,23 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   Delay_Q1.process(right_data,q1);
   Delay_Q2.process(q1,q2);
 
-  vector_diff(left_data,i2,a1,64);
-  vector_diff(right_data,q2,a2,64);
+  arm_sub_f32(left_data,i2,a1,64);
+  arm_sub_f32(right_data,q2,a2,64);
 
-  vector_mult(i1,a2,b1,64);
-  vector_mult(q1,a1,b2,64);
+  arm_mult_f32(i1,a2,b1,64);
+  arm_mult_f32(q1,a1,b2,64);
   
-  vector_diff(b1,b2,r,64);
+  arm_sub_f32(b1,b2,r,64);
 
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
     TransferL[TransferHead][i] = r[i] * amp;
-    TransferR[TransferHead][i] = 0;
+    TransferR[TransferHead][i] = right_data[i];
   }
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
-  */
 }
 
 // Interrupt service routine from DMA controller
@@ -610,11 +584,15 @@ void setup() {
 }
 
 volatile long lastDisplay = 0;
+volatile long count = 0;
 
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
-    
+    count++;
+
+    Serial.print(count);
+    Serial.print(" ");
     Serial.print("minL=");
     Serial.print(minL);
     Serial.print(" maxL=");
