@@ -293,7 +293,7 @@ volatile int TransferTail = 0;
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
-    uint32_t s_right = (uint32_t)TransferR[TransferTail][i] << 16;
+    uint32_t s_right = ((uint32_t)TransferR[TransferTail][i] << 16) & 0xffff0000;
     uint32_t s_left = (uint32_t)TransferL[TransferTail][i];
     txBuffer[i] = s_left | s_right;
   }
