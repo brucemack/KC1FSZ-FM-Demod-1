@@ -615,16 +615,16 @@ void loop() {
     
     Serial.print("minL=");
     Serial.print(minL);
-    Serial.print("maxL=");
+    Serial.print(" maxL=");
     Serial.print(maxL);
-    Serial.print("avgL=");
+    Serial.print(" avgL=");
     Serial.print(avgL);
 
-    Serial.print("minR=");
+    Serial.print(" minR=");
     Serial.print(minR);
-    Serial.print("maxR=");
+    Serial.print(" maxR=");
     Serial.print(maxR);
-    Serial.print("avgR=");
+    Serial.print(" avgR=");
     Serial.print(avgR);
 
     Serial.println();
