@@ -291,14 +291,12 @@ volatile int TransferTail = 0;
 // This is where we actually generate the transmit data.
 //
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
-
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
     uint32_t s_right = (uint32_t)TransferR[TransferTail][i] << 16;
     uint32_t s_left = (uint32_t)TransferL[TransferTail][i];
     txBuffer[i] = s_left | s_right;
   }
-
   if (++TransferTail == TransferSize) {
     TransferTail = 0;
   }
@@ -311,6 +309,14 @@ static DelayLine Delay_Q2(64);
 
 static float32_t amp = 1.0;
 static bool flip = false;
+
+static float32_t minL = 0;
+static float32_t maxL = 0;
+static float32_t avgL = 0;
+
+static float32_t minR = 0;
+static float32_t maxR = 0;
+static float32_t avgR = 0;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
@@ -327,6 +333,27 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     }
   }
 
+  minL = 0;
+  maxL = 0;
+  avgL = 0;
+  minR = 0;
+  maxR = 0;
+  avgR = 0;
+
+  for (int i = 0; i < 64; i++) {
+    minL = min(minL,left_data[i]);
+    maxL = max(maxL,left_data[i]);
+    avgL += left_data[i];
+
+    minR = min(minR,right_data[i]);
+    maxR = max(maxR,right_data[i]);
+    avgR += right_data[i];
+  }
+  
+  avgL /= 64.0;
+  avgR /= 64.0;
+  
+  /*
   float32_t i1[64],i2[64],q1[64],q2[64];
   float32_t a1[64],a2[64],b1[64],b2[64];
   float32_t r[64];
@@ -354,6 +381,7 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   if (++TransferHead == TransferSize) {
     TransferHead = 0;
   }
+  */
 }
 
 // Interrupt service routine from DMA controller
@@ -584,5 +612,21 @@ volatile long lastDisplay = 0;
 void loop() {
   if (millis() - lastDisplay > 2000) {
     lastDisplay = millis();
+    
+    Serial.print("minL=");
+    Serial.print(minL);
+    Serial.print("maxL=");
+    Serial.print(maxL);
+    Serial.print("avgL=");
+    Serial.print(avgL);
+
+    Serial.print("minR=");
+    Serial.print(minR);
+    Serial.print("maxR=");
+    Serial.print(maxR);
+    Serial.print("avgR=");
+    Serial.print(avgR);
+
+    Serial.println();
   }
 }
