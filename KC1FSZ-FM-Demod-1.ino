@@ -312,11 +312,9 @@ static bool flip = false;
 
 static float32_t minL = 0;
 static float32_t maxL = 0;
-static float32_t avgL = 0;
 
 static float32_t minR = 0;
 static float32_t maxR = 0;
-static float32_t avgR = 0;
 
 // This is where we actually consume the receive data.
 void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
@@ -335,23 +333,26 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
 
   minL = 0;
   maxL = 0;
-  avgL = 0;
   minR = 0;
   maxR = 0;
-  avgR = 0;
 
   for (int i = 0; i < 64; i++) {
     minL = min(minL,left_data[i]);
     maxL = max(maxL,left_data[i]);
-    avgL += left_data[i];
-
     minR = min(minR,right_data[i]);
     maxR = max(maxR,right_data[i]);
-    avgR += right_data[i];
   }
   
-  avgL /= 64.0;
-  avgR /= 64.0;
+  // Capture the data into the feedthrough buffer.  
+  // This is a signed float32 being written into a signed int16
+  for (unsigned int i = 0; i < 64; i++) {
+    TransferL[TransferHead][i] = left_data[i];
+    TransferR[TransferHead][i] = right_data[i];
+  }
+  if (++TransferHead == TransferSize) {
+    TransferHead = 0;
+  }
+
   
   /*
   float32_t i1[64],i2[64],q1[64],q2[64];
@@ -602,7 +603,7 @@ void setup() {
   sgtl5000_1.enable();
   sgtl5000_1.volume(0.5);
   sgtl5000_1.inputSelect(AUDIO_INPUT_LINEIN);
-  sgtl5000_1.lineInLevel(8);
+  sgtl5000_1.lineInLevel(15);
   
   Serial.println("setup() done");
 }
@@ -617,15 +618,11 @@ void loop() {
     Serial.print(minL);
     Serial.print(" maxL=");
     Serial.print(maxL);
-    Serial.print(" avgL=");
-    Serial.print(avgL);
 
     Serial.print(" minR=");
     Serial.print(minR);
     Serial.print(" maxR=");
     Serial.print(maxR);
-    Serial.print(" avgR=");
-    Serial.print(avgR);
 
     Serial.println();
   }
