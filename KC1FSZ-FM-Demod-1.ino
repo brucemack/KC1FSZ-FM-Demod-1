@@ -221,7 +221,7 @@ static void DMAChannel_clearInterrupt(uint8_t channel) {
 }
 
 /**
- * Used to implement a one tap delay across a block of samples
+ * Used to implement a one tap delay across a block of samples.
  */
 class DelayLine {
 public:
@@ -229,6 +229,10 @@ public:
   DelayLine(int blockSize) : _blockSize(blockSize), _state(0) {
   }
 
+  /**
+   * Takes in a block of samples and returns a block that is 
+   * delayed by one tap.
+   */
   void process(float32_t* input,float32_t* output) {
       // Recycle the oldest entry
       output[0] = _state;
@@ -265,7 +269,6 @@ volatile int TransferHead = 0;
 volatile int TransferTail = 0;
 
 // This is where we actually generate the transmit data.
-//
 void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {  
   for (unsigned int i = 0; i < txBufferSize && i < 64; i++) {
     // We need to shift the data up to the high side of the 32-bit word
@@ -279,6 +282,7 @@ void make_tx_data(uint32_t txBuffer[],unsigned int txBufferSize) {
   }
 }
 
+// Data used by SDR mechanism
 static DelayLine Delay_I1(64);
 static DelayLine Delay_I2(64);
 static DelayLine Delay_Q1(64);
@@ -318,23 +322,12 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
     minR = min(minR,right_data[i]);
     maxR = max(maxR,right_data[i]);
   }
-
-  /*
-  // Capture the data into the feedthrough buffer.  
-  // This is a signed float32 being written into a signed int16
-  for (unsigned int i = 0; i < 64; i++) {
-    TransferL[TransferHead][i] = left_data[i];
-    TransferR[TransferHead][i] = right_data[i];
-  }
-  if (++TransferHead == TransferSize) {
-    TransferHead = 0;
-  }
-  */
   
   float32_t i1[64],i2[64],q1[64],q2[64];
   float32_t a1[64],a2[64],b1[64],b2[64];
   float32_t r[64];
 
+  // The DSP action is as follows
   Delay_I1.process(left_data,i1);
   Delay_I2.process(i1,i2);
   
@@ -352,7 +345,9 @@ void consume_rx_data(uint32_t rxBuffer[],unsigned int rxBufferSize) {
   // Capture the data into the feedthrough buffer.  
   // This is a signed float32 being written into a signed int16
   for (unsigned int i = 0; i < 64; i++) {
+    // Left channel is the demodulated FM
     TransferL[TransferHead][i] = r[i] * amp;
+    // Right channel is a pass-through for diagnostic purposes
     TransferR[TransferHead][i] = right_data[i];
   }
   if (++TransferHead == TransferSize) {
